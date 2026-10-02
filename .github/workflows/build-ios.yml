@@ -9,8 +9,8 @@ jobs:
 
     env:
       VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
-      GX_MOLTENVK_ROOT: ${{ runner.temp }}/gx-moltenvk
-      GX_FONTS: ${{ runner.temp }}/gx-fonts
+      GX_MOLTENVK_ROOT: ${{ github.workspace }}/.gx-moltenvk
+      GX_FONTS: ${{ github.workspace }}/.gx-fonts
 
     steps:
       - name: Checkout source
