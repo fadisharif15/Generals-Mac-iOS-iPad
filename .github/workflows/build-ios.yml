@@ -1,0 +1,157 @@
+name: Build Generals Zero Hour iOS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/.vcpkg
+      GX_MOLTENVK_ROOT: ${{ runner.temp }}/gx-moltenvk
+      GX_FONTS: ${{ runner.temp }}/gx-fonts
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Checkout iOS DXVK submodule
+        run: |
+          git submodule update --init references/fbraz3-dxvk
+
+      - name: Install build tools
+        run: |
+          brew install cmake ninja meson pkgconf \
+            autoconf autoconf-archive automake libtool xcodegen
+
+      - name: Install vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Prepare MoltenVK and fonts
+        run: |
+          ./scripts/build/ios/fetch-moltenvk.sh
+          ./scripts/build/ios/stage-fonts.sh
+
+          MVK="$GX_MOLTENVK_ROOT/MoltenVK/MoltenVK"
+          SDK="$RUNNER_TEMP/vulkan-sdk"
+
+          mkdir -p "$SDK/lib"
+
+          cp -R "$MVK/static/MoltenVK.xcframework" "$SDK/lib/"
+          cp -R "$MVK/include" "$SDK/include"
+
+          echo "VULKAN_SDK=$SDK" >> "$GITHUB_ENV"
+
+      - name: Configure iOS build
+        run: |
+          cmake --preset ios-vulkan
+
+      - name: Build Zero Hour
+        run: |
+          cmake --build build/ios-vulkan --target z_generals -j 3
+
+      - name: Build unsigned iOS shell
+        run: |
+          cd ios
+
+          xcodegen generate --quiet
+
+          xcodebuild \
+            -project GeneralsXZH.xcodeproj \
+            -scheme GeneralsXZH \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PRODUCT_BUNDLE_IDENTIFIER="com.generalsx.zh" \
+            build
+
+      - name: Assemble unsigned IPA
+        run: |
+          ROOT="$GITHUB_WORKSPACE"
+          BUILD="$ROOT/build/ios-vulkan"
+
+          SHELL_APP="$ROOT/ios/build/Build/Products/Release-iphoneos/GeneralsXZH.app"
+          PACKAGE="$RUNNER_TEMP/generals-package"
+          APP="$PACKAGE/Payload/GeneralsXZH.app"
+
+          mkdir -p "$PACKAGE/Payload"
+          cp -R "$SHELL_APP" "$APP"
+
+          rm -rf "$APP/_CodeSignature"
+          rm -f "$APP/embedded.mobileprovision"
+
+          # Real Generals Zero Hour executable
+          cp \
+            "$BUILD/GeneralsMD/GeneralsXZH.app/GeneralsXZH" \
+            "$APP/GeneralsXZH"
+
+          mkdir -p "$APP/Frameworks"
+
+          # DXVK
+          cp \
+            "$BUILD/_deps/dxvk-build-macos/src/d3d8/libdxvk_d3d8.0.dylib" \
+            "$APP/Frameworks/"
+
+          cp \
+            "$BUILD/_deps/dxvk-build-macos/src/d3d9/libdxvk_d3d9.0.dylib" \
+            "$APP/Frameworks/"
+
+          # SDL
+          cp \
+            "$BUILD/_deps/sdl3-build/libSDL3.0.dylib" \
+            "$APP/Frameworks/"
+
+          cp \
+            "$BUILD/_deps/sdl3_image-build/libSDL3_image.0.dylib" \
+            "$APP/Frameworks/"
+
+          # OpenAL
+          cp \
+            "$BUILD/_deps/openal_soft-build/libopenal.1.24.2.dylib" \
+            "$APP/Frameworks/libopenal.1.dylib"
+
+          # GameSpy is optional
+          if [ -f "$BUILD/libgamespy.dylib" ]; then
+            cp "$BUILD/libgamespy.dylib" "$APP/Frameworks/"
+          fi
+
+          # Dynamic MoltenVK used at runtime
+          cp -R \
+            "$GX_MOLTENVK_ROOT/MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework" \
+            "$APP/Frameworks/"
+
+          install_name_tool \
+            -add_rpath "@executable_path/Frameworks" \
+            "$APP/GeneralsXZH" || true
+
+          cd "$PACKAGE"
+          zip -qry "$ROOT/GeneralsXZH-unsigned.ipa" Payload
+
+      - name: Create files needed with game assets
+        run: |
+          SUPPORT="$RUNNER_TEMP/GeneralsXZH-Support"
+
+          mkdir -p "$SUPPORT/fonts"
+
+          cp "$GX_FONTS"/*.ttf "$SUPPORT/fonts/"
+          cp ios/config/dxvk.conf "$SUPPORT/dxvk.conf"
+          cp ios/config/Options.ini "$SUPPORT/DefaultOptions.ini"
+
+          cd "$SUPPORT"
+          zip -qry "$GITHUB_WORKSPACE/GeneralsXZH-Support-Files.zip" .
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeneralsXZH-iOS
+          path: |
+            GeneralsXZH-unsigned.ipa
+            GeneralsXZH-Support-Files.zip
+          if-no-files-found: error
