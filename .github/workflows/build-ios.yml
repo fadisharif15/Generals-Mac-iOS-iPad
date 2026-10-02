@@ -30,20 +30,50 @@ jobs:
           git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
-      - name: Prepare MoltenVK and fonts
+      - name: Prepare MoltenVK, Vulkan headers and fonts
         run: |
           ./scripts/build/ios/fetch-moltenvk.sh
           ./scripts/build/ios/stage-fonts.sh
 
           MVK="$GX_MOLTENVK_ROOT/MoltenVK/MoltenVK"
           SDK="$RUNNER_TEMP/vulkan-sdk"
+          VULKAN_HEADERS="$RUNNER_TEMP/Vulkan-Headers"
 
-          mkdir -p "$SDK/lib"
+          mkdir -p "$SDK/lib" "$SDK/include"
 
-          cp -R "$MVK/static/MoltenVK.xcframework" "$SDK/lib/"
-          cp -R "$MVK/include" "$SDK/include"
+          # MoltenVK static library for iOS
+          cp -R \
+            "$MVK/static/MoltenVK.xcframework" \
+            "$SDK/lib/"
+
+          # MoltenVK specific headers
+          cp -R \
+            "$MVK/include/MoltenVK" \
+            "$SDK/include/"
+
+          # Vulkan headers required by DXVK
+          git clone \
+            https://github.com/KhronosGroup/Vulkan-Headers.git \
+            "$VULKAN_HEADERS"
+
+          git -C "$VULKAN_HEADERS" checkout \
+            6aefb8eb95c8e170d0805fd0f2d02832ec1e099a
+
+          cp -R \
+            "$VULKAN_HEADERS/include/vulkan" \
+            "$SDK/include/"
+
+          cp -R \
+            "$VULKAN_HEADERS/include/vk_video" \
+            "$SDK/include/"
 
           echo "VULKAN_SDK=$SDK" >> "$GITHUB_ENV"
+
+          # Verify the exact header that failed before continuing
+          test -f "$SDK/include/vulkan/vulkan.h"
+
+          echo "Vulkan SDK prepared at: $SDK"
+          ls "$SDK/include/vulkan/vulkan.h"
 
       - name: Configure iOS build
         run: |
